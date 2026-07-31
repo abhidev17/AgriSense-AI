@@ -1,0 +1,4 @@
+# This file is intentionally empty.
+# Static image uploads are saved here by the backend.
+# Sub-directories are created automatically (e.g. 2024-07/).
+# Add this directory to .gitignore in production.
