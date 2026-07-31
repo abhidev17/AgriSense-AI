@@ -1,0 +1,110 @@
+.page {
+  padding-top: var(--navbar-height);
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #f0fdf4 0%, #fff 60%);
+  text-align: center;
+  padding: calc(var(--navbar-height) + var(--space-12)) var(--space-6) var(--space-12);
+}
+
+.container {
+  max-width: 520px;
+  width: 100%;
+  animation: fadeInUp 0.5s ease both;
+}
+
+.errorCode {
+  font-size: clamp(80px, 15vw, 140px);
+  font-weight: 900;
+  background: linear-gradient(135deg, var(--color-primary), var(--color-primary-light));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  line-height: 1;
+  margin-bottom: var(--space-4);
+  letter-spacing: -2px;
+}
+
+.iconWrap {
+  width: 80px;
+  height: 80px;
+  background: rgba(22, 163, 74, 0.08);
+  border-radius: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto 32px;
+  box-shadow: 0 4px 16px rgba(22, 163, 74, 0.05);
+}
+
+.iconWrap svg {
+  width: 40px;
+  height: 40px;
+}
+
+.title {
+  font-size: clamp(1.6rem, 3.5vw, 2.2rem);
+  font-weight: 900;
+  color: var(--color-text);
+  margin-bottom: var(--space-4);
+  letter-spacing: -0.5px;
+}
+
+.desc {
+  font-size: var(--font-size-base);
+  color: var(--color-text-secondary);
+  line-height: 1.75;
+  margin-bottom: var(--space-10);
+}
+
+.actions {
+  display: flex;
+  gap: var(--space-4);
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.btnPrimary {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 14px 28px;
+  background: linear-gradient(135deg, var(--color-primary), var(--color-primary-dark));
+  color: #fff;
+  border-radius: var(--radius-full);
+  font-size: var(--font-size-base);
+  font-weight: 700;
+  text-decoration: none;
+  box-shadow: var(--shadow-green);
+  transition: all var(--transition-base);
+  border: none;
+  cursor: pointer;
+}
+
+.btnPrimary:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 28px rgba(22,163,74,0.45);
+}
+
+.btnSecondary {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 14px 28px;
+  background: #fff;
+  color: var(--color-primary-dark);
+  border: 2px solid var(--color-primary-muted);
+  border-radius: var(--radius-full);
+  font-size: var(--font-size-base);
+  font-weight: 700;
+  text-decoration: none;
+  transition: all var(--transition-base);
+}
+
+.btnSecondary:hover {
+  border-color: var(--color-primary);
+  transform: translateY(-2px);
+  background: rgba(22, 163, 74, 0.02);
+}
