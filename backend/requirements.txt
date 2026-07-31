@@ -13,22 +13,28 @@ pymongo==4.9.2
 
 # ─── HTTP clients ─────────────────────────────────────────────────────────────
 httpx==0.28.1
-requests==2.32.3
+requests==2.34.2
 
 # ─── Image processing ─────────────────────────────────────────────────────────
-Pillow==11.0.0
+Pillow==12.2.0
 
 # ─── Environment ──────────────────────────────────────────────────────────────
-python-dotenv==1.0.1
+python-dotenv==1.2.2
 
 # ─── Utilities ────────────────────────────────────────────────────────────────
-python-dateutil==2.9.0
+python-dateutil==2.9.0.post0
 
 # ─── Google Gemini AI ──────────────────────────────────────────────────────────
-# Uncomment when GEMINI_API_KEY is set in .env
-# google-generativeai==0.8.3
+google-generativeai==0.8.6
+
+# ─── Machine Learning & Computer Vision ────────────────────────────────────────
+torch==2.12.1
+torchvision==0.27.1
+scikit-learn==1.9.0
+numpy==2.4.6
+opencv-python==4.13.0.92
+tqdm==4.70.0
 
 # ─── Testing ───────────────────────────────────────────────────────────────────
 pytest==8.3.4
 pytest-asyncio==0.24.0
-httpx==0.28.1

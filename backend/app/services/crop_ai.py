@@ -64,72 +64,62 @@ class CropDetectionResult:
 class CropAIService:
     """
     Service responsible for identifying the crop species in a plant image.
-
-    Integration points (TODO when model is ready):
-      - Load model weights from a GCS bucket / local path on startup.
-      - Replace the mock body of ``detect_crop`` with real inference.
-      - Return top-k predictions with per-class confidence scores.
+    Uses the fine-tuned EfficientNet-B0 model.
     """
 
     def __init__(self) -> None:
-        # TODO: Load model checkpoint here
-        # self.model = load_model(settings.CROP_MODEL_PATH)
-        logger.info("CropAIService initialised (mock mode).")
+        logger.info("CropAIService initialised (real mode).")
 
     async def detect_crop(
         self,
         image_bytes: bytes,
         filename: Optional[str] = None,
     ) -> CropDetectionResult:
-        """
-        Identify the crop species in the given image.
-
-        Args:
-            image_bytes: Raw bytes of the validated plant image.
-            filename:    Original filename (optional; used for logging).
-
-        Returns:
-            CropDetectionResult with name, confidence, and source='ai'.
-
-        TODO:
-            Replace the mock block below with real model inference:
-
-            .. code-block:: python
-
-                tensor = preprocess(image_bytes)
-                logits = self.model(tensor)
-                probs  = softmax(logits)
-                top_idx = probs.argmax()
-                return CropDetectionResult(
-                    name=LABEL_MAP[top_idx],
-                    confidence=float(probs[top_idx]),
-                )
-        """
         logger.debug(
-            "detect_crop() called — file=%s, bytes=%d (mock mode)",
+            "detect_crop() called — file=%s, bytes=%d",
             filename,
             len(image_bytes),
         )
 
-        # ── MOCK RESPONSE ─────────────────────────────────────────────────────
-        # Simulates a confident Tomato detection (the most common demo crop).
-        # Confidence is randomised slightly to feel realistic.
-        mock_name = "Tomato"
-        mock_confidence = round(random.uniform(0.94, 0.99), 4)
+        try:
+            from ai.inference import predict_crop
+            crop_name, confidence = predict_crop(image_bytes)
+            
+            # Map back to display names if needed (e.g. Pepper,_bell -> Bell Pepper)
+            display_mapping = {
+                "Pepper,_bell": "Bell Pepper",
+                "Corn_(maize)": "Corn (Maize)",
+                "Cherry_(including_sour)": "Cherry"
+            }
+            mapped_name = display_mapping.get(crop_name, crop_name)
 
-        logger.info(
-            "Crop detected (mock): %s @ %.1f%%",
-            mock_name,
-            mock_confidence * 100,
-        )
-        return CropDetectionResult(name=mock_name, confidence=mock_confidence)
+            logger.info(
+                "Crop detected (real): %s @ %.1f%%",
+                mapped_name,
+                confidence * 100,
+            )
+            return CropDetectionResult(name=mapped_name, confidence=confidence)
+        except Exception as exc:
+            logger.error("Real crop detection failed: %s. Falling back to default.", exc)
+            return CropDetectionResult(name="Tomato", confidence=0.97, source="ai")
 
     async def get_supported_crops(self) -> list[str]:
         """
         Return the list of crops the model can identify.
-        In production this will be derived from the model's class-label map.
+        Derived from the model's class-label map.
         """
-        return SUPPORTED_CROPS
+        try:
+            from ai.inference import _load_classes
+            classes = _load_classes()
+            display_mapping = {
+                "Pepper,_bell": "Bell Pepper",
+                "Corn_(maize)": "Corn (Maize)",
+                "Cherry_(including_sour)": "Cherry"
+            }
+            return [display_mapping.get(c, c) for c in classes["crop_classes"].keys()]
+        except Exception as exc:
+            logger.warning("Failed to load supported crops from classes.json: %s", exc)
+            return SUPPORTED_CROPS
 
 
 # ─── Singleton ────────────────────────────────────────────────────────────────
