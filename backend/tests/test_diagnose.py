@@ -197,3 +197,25 @@ class TestDiagnoseEndpoint:
             data={"latitude": "999.0", "longitude": "73.85"},
         )
         assert response.status_code == 422
+
+    def test_non_leaf_image_rejected(self, client: TestClient, sample_jpeg_bytes: bytes):
+        """Image with 'non-leaf' in filename is rejected by verification check."""
+        response = client.post(
+            "/diagnose",
+            files={"image": ("non-leaf-test.jpg", sample_jpeg_bytes, "image/jpeg")},
+        )
+        assert response.status_code == 400
+        data = response.json()
+        assert data["success"] is False
+        assert data["message"] == "No crop leaf detected. Please upload a clear image of a crop leaf."
+
+    def test_unrelated_image_rejected(self, client: TestClient, sample_jpeg_bytes: bytes):
+        """Image with 'unrelated' in filename is rejected by verification check."""
+        response = client.post(
+            "/diagnose",
+            files={"image": ("unrelated_photo.jpg", sample_jpeg_bytes, "image/jpeg")},
+        )
+        assert response.status_code == 400
+        data = response.json()
+        assert data["success"] is False
+        assert data["message"] == "No crop leaf detected. Please upload a clear image of a crop leaf."

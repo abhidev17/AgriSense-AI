@@ -14,7 +14,26 @@ CROP_MODEL_PATH = os.path.join(MODELS_DIR, "crop_model.pth")
 DISEASE_MODEL_PATH = os.path.join(MODELS_DIR, "disease_model.pth")
 CLASSES_PATH = os.path.join(MODELS_DIR, "classes.json")
 
-# Crop name mappings from API friendly names to PlantVillage prefix names
+# Import canonical val-time preprocessing from dataset.py.
+# This guarantees inference uses the EXACT same pipeline as validation,
+# which is critical for confidence scores matching training expectations.
+try:
+    import sys
+    sys.path.insert(0, AI_DIR)
+    from dataset import get_val_transforms
+    _transform = get_val_transforms()
+except ImportError:
+    # Fallback if dataset.py is unavailable (e.g. during standalone testing)
+    _transform = transforms.Compose([
+        transforms.Resize(256),
+        transforms.CenterCrop(224),
+        transforms.ToTensor(),
+        transforms.Normalize(
+            mean=[0.485, 0.456, 0.406],
+            std=[0.229, 0.224, 0.225]
+        )
+    ])
+
 CROP_NAME_MAPPING = {
     "Tomato": "Tomato",
     "Potato": "Potato",
@@ -37,16 +56,6 @@ _classes_data = None
 _idx_to_crop = None
 _idx_to_disease = None
 _device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-# Preprocessing transforms (ImageNet normalization)
-_transform = transforms.Compose([
-    transforms.Resize((224, 224)),
-    transforms.ToTensor(),
-    transforms.Normalize(
-        mean=[0.485, 0.456, 0.406],
-        std=[0.229, 0.224, 0.225]
-    )
-])
 
 
 def _load_classes():
@@ -77,13 +86,21 @@ def _load_crop_model():
 
     model = efficientnet_b0(weights=None)
     num_features = model.classifier[1].in_features
-    model.classifier[1] = nn.Linear(num_features, num_classes)
+    model.classifier = nn.Sequential(
+        nn.Dropout(p=0.3, inplace=True),
+        nn.Linear(num_features, num_classes),
+    )
 
     if not os.path.exists(CROP_MODEL_PATH):
         raise FileNotFoundError(f"Crop model weights not found at {CROP_MODEL_PATH}")
 
-    state_dict = torch.load(CROP_MODEL_PATH, map_location=_device)
-    model.load_state_dict(state_dict)
+    # Support both plain state_dict (old) and full checkpoint dict (new trainer)
+    ckpt = torch.load(CROP_MODEL_PATH, map_location=_device)
+    if isinstance(ckpt, dict) and "model_state_dict" in ckpt:
+        model.load_state_dict(ckpt["model_state_dict"])
+    else:
+        model.load_state_dict(ckpt)
+
     model.to(_device)
     model.eval()
 
@@ -101,13 +118,21 @@ def _load_disease_model():
 
     model = efficientnet_b0(weights=None)
     num_features = model.classifier[1].in_features
-    model.classifier[1] = nn.Linear(num_features, num_classes)
+    model.classifier = nn.Sequential(
+        nn.Dropout(p=0.3, inplace=True),
+        nn.Linear(num_features, num_classes),
+    )
 
     if not os.path.exists(DISEASE_MODEL_PATH):
         raise FileNotFoundError(f"Disease model weights not found at {DISEASE_MODEL_PATH}")
 
-    state_dict = torch.load(DISEASE_MODEL_PATH, map_location=_device)
-    model.load_state_dict(state_dict)
+    # Support both plain state_dict (old) and full checkpoint dict (new trainer)
+    ckpt = torch.load(DISEASE_MODEL_PATH, map_location=_device)
+    if isinstance(ckpt, dict) and "model_state_dict" in ckpt:
+        model.load_state_dict(ckpt["model_state_dict"])
+    else:
+        model.load_state_dict(ckpt)
+
     model.to(_device)
     model.eval()
 

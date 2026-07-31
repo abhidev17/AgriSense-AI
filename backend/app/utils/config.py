@@ -40,10 +40,20 @@ class Settings(BaseSettings):
         description="Allowed MIME types for uploaded images",
     )
 
-    # ─── AI Services (placeholders) ────────────────────────────────────────────
+    # ─── AI Services ───────────────────────────────────────────────────────────
     GEMINI_API_KEY: str = Field(default="", description="Google Gemini API key")
     GEMINI_MODEL: str = Field(
-        default="gemini-1.5-flash", description="Gemini model name"
+        default="gemini-2.0-flash", description="Gemini model name"
+    )
+
+    # ─── AI Confidence Thresholds ──────────────────────────────────────────────
+    CROP_CONFIDENCE_THRESHOLD: float = Field(
+        default=0.40,
+        description="Minimum crop detection confidence (0.0–1.0). Below this, pipeline is rejected.",
+    )
+    DISEASE_CONFIDENCE_THRESHOLD: float = Field(
+        default=0.50,
+        description="Minimum disease detection confidence (0.0–1.0). Below this, returns Unknown Disease.",
     )
 
     # ─── Weather API (placeholder) ─────────────────────────────────────────────

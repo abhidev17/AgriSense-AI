@@ -138,7 +138,9 @@ class ActionPlanService:
         """
         # Try to use Gemini
         from app.services.gemini import gemini_service
-        if not gemini_service.is_mock_mode and gemini_service._model is not None:
+        from app.utils.config import get_settings
+        settings = get_settings()
+        if not gemini_service.is_mock_mode and gemini_service._client is not None:
             try:
                 current_date = datetime.date.today().isoformat()
                 prompt = f"""You are an expert recovery planner for AgriSense AI.
@@ -176,7 +178,10 @@ You MUST respond with EXACTLY a JSON object matching this schema:
 }}
 Do not include any formatting or text outside the JSON. Return only valid raw JSON."""
 
-                response = gemini_service._model.generate_content(prompt)
+                response = gemini_service._client.models.generate_content(
+                    model=settings.GEMINI_MODEL,
+                    contents=prompt,
+                )
                 text = response.text.strip()
                 if text.startswith("```"):
                     lines = text.splitlines()

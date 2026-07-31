@@ -1,182 +1,135 @@
+"""
+train_crop.py — Production crop classifier training script for AgriSense AI.
+
+Trains an EfficientNet-B0 to classify crop species from PlantVillage images.
+
+Usage (from the backend/ai/ directory):
+    python train_crop.py
+
+Expected dataset layout:
+    datasets/PlantVillage/
+        Tomato___Early_blight/    ← folder names follow PlantVillage convention
+        Tomato___healthy/
+        Potato___Early_blight/
+        ...
+
+Outputs:
+    models/crop_model.pth          ← best checkpoint (full training state)
+    models/classes.json            ← updated crop_classes mapping
+    models/reports/crop_*.txt/csv/json  ← evaluation reports
+
+Target: >95% validation accuracy on PlantVillage crops.
+"""
+
 import json
+import sys
 from pathlib import Path
 
+# Make sure imports resolve whether run from /ai or /backend
+sys.path.insert(0, str(Path(__file__).parent))
+
 import torch
-import torch.nn as nn
 from torch.utils.data import DataLoader
-from torchvision.models import efficientnet_b0, EfficientNet_B0_Weights
 
 from dataset import PlantVillageDataset
+from trainer import AgriSenseTrainer, TrainConfig
 from utils import load_crop_dataset
 
-# =====================================================
-# Configuration
-# =====================================================
+# ──────────────────────────────────────────────────────────────────────────────
+# Configuration  — edit these values to tune training
+# ──────────────────────────────────────────────────────────────────────────────
 
-DATASET_PATH = "../datasets/PlantVillage"
-MODEL_SAVE_PATH = "../models/crop_model.pth"
-CLASS_FILE = "../models/classes.json"
+cfg = TrainConfig()
+cfg.MODEL_NAME      = "crop"
+cfg.DATASET_PATH    = "../datasets/PlantVillage"
+cfg.SAVE_DIR        = "../models"
 
-BATCH_SIZE = 32
-EPOCHS = 10
-LEARNING_RATE = 1e-4
+# Architecture
+cfg.FREEZE_BACKBONE  = True    # freeze EfficientNet backbone initially
+cfg.UNFREEZE_EPOCH   = 10      # unfreeze backbone from this epoch onwards
+cfg.FINETUNE_LR      = 1e-5   # lower LR for fine-tuning stage
 
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+# Optimiser
+cfg.BATCH_SIZE       = 32
+cfg.EPOCHS           = 30
+cfg.LEARNING_RATE    = 3e-4
+cfg.WEIGHT_DECAY     = 1e-4
 
-torch.manual_seed(42)
-if torch.cuda.is_available():
-    torch.cuda.manual_seed_all(42)
+# Scheduler
+cfg.LR_FACTOR        = 0.5
+cfg.LR_PATIENCE      = 2
 
-# =====================================================
-# Load Dataset
-# =====================================================
+# Early stopping
+cfg.PATIENCE         = 5
 
-train_x, val_x, train_y, val_y, crop_classes = load_crop_dataset(
-    DATASET_PATH
-)
+# Reproducibility
+cfg.SEED             = 42
+cfg.NUM_WORKERS      = 0       # set to 4+ on Linux/Mac for faster loading
 
-# Fast generation mode for CI/testing
-QUICK_GEN = True
-if QUICK_GEN:
-    train_x = train_x[:64]
-    train_y = train_y[:64]
-    val_x = val_x[:32]
-    val_y = val_y[:32]
-    EPOCHS = 1
+MODEL_SAVE_PATH = str(Path(cfg.SAVE_DIR) / "crop_model.pth")
+CLASS_FILE      = str(Path(cfg.SAVE_DIR) / "classes.json")
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Dataset
+# ──────────────────────────────────────────────────────────────────────────────
 
-train_dataset = PlantVillageDataset(
-    train_x,
-    train_y,
-    train=True
-)
+print("Loading crop dataset...")
+train_x, val_x, train_y, val_y, crop_classes = load_crop_dataset(cfg.DATASET_PATH)
 
-val_dataset = PlantVillageDataset(
-    val_x,
-    val_y,
-    train=False
-)
+print(f"  Train samples : {len(train_x)}")
+print(f"  Val samples   : {len(val_x)}")
+print(f"  Crop classes  : {len(crop_classes)}  → {list(crop_classes.keys())}\n")
+
+train_dataset = PlantVillageDataset(train_x, train_y, train=True)
+val_dataset   = PlantVillageDataset(val_x,   val_y,   train=False)
 
 train_loader = DataLoader(
     train_dataset,
-    batch_size=BATCH_SIZE,
+    batch_size=cfg.BATCH_SIZE,
     shuffle=True,
-    num_workers=0,
+    num_workers=cfg.NUM_WORKERS,
     pin_memory=torch.cuda.is_available(),
+    persistent_workers=(cfg.NUM_WORKERS > 0),
 )
 
 val_loader = DataLoader(
     val_dataset,
-    batch_size=BATCH_SIZE,
+    batch_size=cfg.BATCH_SIZE,
     shuffle=False,
-    num_workers=0,
+    num_workers=cfg.NUM_WORKERS,
     pin_memory=torch.cuda.is_available(),
+    persistent_workers=(cfg.NUM_WORKERS > 0),
 )
 
-# =====================================================
-# Model
-# =====================================================
+# ──────────────────────────────────────────────────────────────────────────────
+# Train
+# ──────────────────────────────────────────────────────────────────────────────
 
-weights = EfficientNet_B0_Weights.DEFAULT
-
-model = efficientnet_b0(weights=weights)
-
-num_features = model.classifier[1].in_features
-
-model.classifier[1] = nn.Linear(
-    num_features,
-    len(crop_classes)
+trainer = AgriSenseTrainer(
+    cfg=cfg,
+    num_classes=len(crop_classes),
+    save_path=MODEL_SAVE_PATH,
 )
 
-model = model.to(DEVICE)
+best_accuracy = trainer.fit(train_loader, val_loader)
 
-criterion = nn.CrossEntropyLoss()
+# ──────────────────────────────────────────────────────────────────────────────
+# Post-training evaluation
+# ──────────────────────────────────────────────────────────────────────────────
 
-optimizer = torch.optim.Adam(
-    model.parameters(),
-    lr=LEARNING_RATE
-)
+print("Generating evaluation report on validation set...")
+class_names = list(crop_classes.keys())
+trainer.evaluate(val_loader, class_names=class_names)
 
-# =====================================================
-# Training
-# =====================================================
+# ──────────────────────────────────────────────────────────────────────────────
+# Save / update classes.json
+# ──────────────────────────────────────────────────────────────────────────────
 
-best_accuracy = 0.0
-
-for epoch in range(EPOCHS):
-
-    model.train()
-
-    running_loss = 0.0
-
-    for images, labels in train_loader:
-
-        images = images.to(DEVICE)
-        labels = labels.to(DEVICE)
-
-        optimizer.zero_grad()
-
-        outputs = model(images)
-
-        loss = criterion(outputs, labels)
-
-        loss.backward()
-
-        optimizer.step()
-
-        running_loss += loss.item()
-
-    # ================= Validation =================
-
-    model.eval()
-
-    correct = 0
-    total = 0
-
-    with torch.no_grad():
-
-        for images, labels in val_loader:
-
-            images = images.to(DEVICE)
-            labels = labels.to(DEVICE)
-
-            outputs = model(images)
-
-            _, predicted = torch.max(outputs, 1)
-
-            total += labels.size(0)
-
-            correct += (predicted == labels).sum().item()
-
-    accuracy = (correct / total) * 100
-
-    print(
-        f"Epoch [{epoch+1}/{EPOCHS}] "
-        f"Loss: {running_loss/len(train_loader):.4f} "
-        f"Validation Accuracy: {accuracy:.2f}%"
-    )
-
-    if accuracy > best_accuracy:
-
-        best_accuracy = accuracy
-
-        Path("../models").mkdir(exist_ok=True)
-
-        torch.save(model.state_dict(), MODEL_SAVE_PATH)
-
-        print("Best model saved.")
-
-# =====================================================
-# Save Crop Classes
-# =====================================================
-
-Path("../models").mkdir(exist_ok=True)
+Path(cfg.SAVE_DIR).mkdir(parents=True, exist_ok=True)
 
 if Path(CLASS_FILE).exists():
-
     with open(CLASS_FILE, "r") as f:
         data = json.load(f)
-
 else:
     data = {}
 
@@ -185,8 +138,15 @@ data["crop_classes"] = crop_classes
 with open(CLASS_FILE, "w") as f:
     json.dump(data, f, indent=4)
 
-print("\n===================================")
-print("Crop Training Completed Successfully")
-print(f"Best Validation Accuracy : {best_accuracy:.2f}%")
-print(f"Model Saved : {MODEL_SAVE_PATH}")
-print("===================================")
+print(f"  classes.json updated at {CLASS_FILE}")
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Final summary
+# ──────────────────────────────────────────────────────────────────────────────
+
+print("\n" + "=" * 60)
+print("  CROP TRAINING COMPLETED")
+print(f"  Best Validation Accuracy : {best_accuracy:.2f}%")
+print(f"  Model saved to           : {MODEL_SAVE_PATH}")
+print(f"  Classes saved to         : {CLASS_FILE}")
+print("=" * 60)
