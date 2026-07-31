@@ -3,10 +3,10 @@ Gemini AI service for AgriSense AI.
 
 REAL IMPLEMENTATION with graceful mock fallback.
 When GEMINI_API_KEY is set in .env, uses Google Generative AI SDK.
-When key is absent, falls back to a rich template response so the
-full pipeline runs without an API key.
+When key is absent or any call fails, falls back to a structured rule-based response.
 """
 
+import json
 from typing import Optional
 
 from app.utils.logger import logger
@@ -14,44 +14,37 @@ from app.utils.config import get_settings
 
 settings = get_settings()
 
-# ─── Prompt Templates ─────────────────────────────────────────────────────────
-
-EXPLANATION_PROMPT = """You are AgriSense AI, an expert agronomist with 20 years of field experience.
+GEMINI_PROMPT_TEMPLATE = """You are AgriSense AI, an expert agronomist. 
 A farmer has uploaded a plant photo and you have identified the following:
-
-- Crop: {crop_name} (detection confidence: {crop_confidence_pct}%)
-- Disease: {disease_name} (detection confidence: {disease_confidence_pct}%)
+- Crop: {crop_name} (confidence: {crop_confidence_pct}%)
+- Disease: {disease_name} (confidence: {disease_confidence_pct}%)
 - Severity: {severity}
 - Affected leaf area: {affected_area}
 - Current temperature: {temperature}
 - Current humidity: {humidity}
-- Current weather: {condition}
+- Weather: {condition}
 
-Write a clear, farmer-friendly explanation in exactly 4 paragraphs:
+Based on this information, generate an agronomical analysis.
+You MUST respond with EXACTLY a JSON object matching this schema:
+{{
+    "summary": "A farmer-friendly 2-sentence summary of what the disease is, how it spreads, and how the current weather conditions affect it.",
+    "features": [
+        "List of 2-3 visual features/symptoms shown by the plant (specifically for {disease_name} on {crop_name})"
+    ],
+    "treatment": [
+        "List of 2-3 critical treatment actions (fungicide/bactericide applications, physical removal, cultural practices)"
+    ],
+    "fertilizer": "NPK or fertilizer recommendation to support plant recovery and boost immunity under these conditions"
+}}
 
-Paragraph 1 — What the disease is: Describe {disease_name} in simple language. What causes it,
-how it spreads, and what it looks like on {crop_name}.
-
-Paragraph 2 — Why now: Explain how the current weather conditions (temperature {temperature},
-humidity {humidity}) are influencing the disease progression.
-
-Paragraph 3 — Immediate actions: List the 2-3 most critical things the farmer must do in the
-next 48 hours to stop further spread.
-
-Paragraph 4 — Outlook: Give a realistic recovery timeline and one long-term prevention tip
-for next season.
-
-Keep the language simple (8th grade reading level), avoid jargon, and be specific and actionable.
-Do NOT use bullet points — write in flowing paragraphs only.
+Your response must contain ONLY the raw JSON object. Do not include markdown code block formatting (e.g. do not wrap in ```json). Do not add any text before or after the JSON.
 """
 
 
 class GeminiService:
     """
-    Service that generates natural-language diagnosis explanations using
-    Google Gemini generative AI.
-
-    Automatically uses mock fallback when GEMINI_API_KEY is not configured.
+    Service that generates structured, farmer-friendly explanations using Google Gemini AI.
+    Gracefully falls back to rule-based JSON output when key is absent or API fails.
     """
 
     def __init__(self) -> None:
@@ -66,7 +59,7 @@ class GeminiService:
                 self._model = genai.GenerativeModel(
                     model_name=settings.GEMINI_MODEL,
                     generation_config={
-                        "temperature": 0.7,
+                        "temperature": 0.2,
                         "top_p": 0.95,
                         "top_k": 40,
                         "max_output_tokens": 1024,
@@ -91,8 +84,6 @@ class GeminiService:
                 "GeminiService initialised in mock mode (GEMINI_API_KEY not set)."
             )
 
-    # ─── Public API ───────────────────────────────────────────────────────────
-
     async def generate_explanation(
         self,
         crop_name: str,
@@ -106,39 +97,21 @@ class GeminiService:
         condition: Optional[str] = None,
     ) -> str:
         """
-        Generate a farmer-friendly 4-paragraph explanation of the diagnosis.
-
-        Uses Gemini API when key is configured, otherwise returns a rich
-        template-based mock response.
-
-        Args:
-            crop_name:          Detected crop species.
-            crop_confidence:    Crop detection confidence (0-1).
-            disease_name:       Detected disease name.
-            disease_confidence: Disease detection confidence (0-1).
-            severity:           'low' | 'moderate' | 'high' | 'critical'.
-            temperature:        Current temperature in Celsius (optional).
-            humidity:           Current humidity percentage (optional).
-            affected_area:      Estimated % of leaf area affected (optional).
-            condition:          Weather condition string (optional).
-
-        Returns:
-            Natural-language explanation string.
+        Generate a structured JSON explanation.
+        If Gemini is unavailable or fails, returns a rule-based fallback JSON string.
         """
         if self._mock_mode or self._model is None:
-            return self._generate_mock_explanation(
+            return self._generate_fallback_explanation(
                 crop_name=crop_name,
                 disease_name=disease_name,
-                disease_confidence=disease_confidence,
                 severity=severity,
                 temperature=temperature,
                 humidity=humidity,
-                affected_area=affected_area,
+                condition=condition,
             )
 
-        # ── Real Gemini call ──────────────────────────────────────────────────
         try:
-            prompt = EXPLANATION_PROMPT.format(
+            prompt = GEMINI_PROMPT_TEMPLATE.format(
                 crop_name=crop_name,
                 crop_confidence_pct=round(crop_confidence * 100, 1),
                 disease_name=disease_name,
@@ -150,39 +123,50 @@ class GeminiService:
                 condition=condition or "not available",
             )
 
+            # Call Gemini
             response = await self._model.generate_content_async(prompt)
-            text = response.text.strip()
+            text_response = response.text.strip()
+            
+            # Clean up JSON if wrapped in markdown formatting by accident
+            if text_response.startswith("```"):
+                lines = text_response.splitlines()
+                if lines[0].startswith("```"):
+                    lines = lines[1:]
+                if lines[-1].startswith("```"):
+                    lines = lines[:-1]
+                text_response = "\n".join(lines).strip()
 
-            logger.info(
-                "Gemini explanation generated — crop=%s, disease=%s (%d chars)",
-                crop_name,
-                disease_name,
-                len(text),
-            )
-            return text
+            # Verify it is valid JSON
+            parsed = json.loads(text_response)
+            
+            # Ensure it contains all expected keys
+            required_keys = ["summary", "features", "treatment", "fertilizer"]
+            for key in required_keys:
+                if key not in parsed:
+                    raise KeyError(f"Missing key in Gemini response: {key}")
+
+            logger.info("Gemini explanation generated successfully.")
+            return json.dumps(parsed)
 
         except Exception as exc:
             logger.warning(
-                "Gemini API call failed (%s). Falling back to mock explanation.", exc
+                "Gemini API call or parsing failed (%s). Falling back to mock.", exc
             )
-            return self._generate_mock_explanation(
+            return self._generate_fallback_explanation(
                 crop_name=crop_name,
                 disease_name=disease_name,
-                disease_confidence=disease_confidence,
                 severity=severity,
                 temperature=temperature,
                 humidity=humidity,
-                affected_area=affected_area,
+                condition=condition,
             )
 
     async def generate_quick_tip(self, crop_name: str, disease_name: str) -> str:
-        """
-        Generate a single-sentence quick tip for dashboard widgets.
-        """
+        """Generate a single-sentence quick tip."""
         if self._mock_mode or self._model is None:
             return (
-                f"Tip: For {disease_name} on {crop_name}, early morning fungicide "
-                "applications are most effective — avoid spraying in full sun or rain."
+                f"For {disease_name} on {crop_name}, clean pruning shears between cuts "
+                "to prevent mechanical transfer of spores."
             )
 
         try:
@@ -194,73 +178,81 @@ class GeminiService:
             return response.text.strip()
         except Exception as exc:
             logger.warning("Gemini quick tip failed: %s", exc)
-            return f"Monitor your {crop_name} daily and consult a local agronomist."
+            return f"Monitor your {crop_name} daily and maintain balanced crop nutrition."
 
-    # ─── Mock fallback ────────────────────────────────────────────────────────
-
-    def _generate_mock_explanation(
+    def _generate_fallback_explanation(
         self,
         crop_name: str,
         disease_name: str,
-        disease_confidence: float,
         severity: str,
         temperature: Optional[float],
         humidity: Optional[float],
-        affected_area: Optional[float],
+        condition: Optional[str],
     ) -> str:
-        """Generate a rich template-based explanation when Gemini is unavailable."""
-        temp_str = f"{temperature}°C" if temperature is not None else "unknown"
-        humid_str = f"{humidity}%" if humidity is not None else "unknown"
-        area_str = f"{affected_area}% of the leaf area" if affected_area else "a portion of the crop"
-        conf_pct = round(disease_confidence * 100, 1)
-
-        severity_context = {
-            "low": "caught early and can be managed with minimal intervention",
-            "moderate": "at a stage where prompt action will prevent further spread",
-            "high": "serious and requires immediate treatment to save the crop",
-            "critical": "at a critical stage — aggressive treatment is urgently needed",
-        }.get(severity, "present and requires attention")
-
-        weather_context = ""
-        if temperature is not None and humidity is not None:
+        """Generate structured fallback explanation when Gemini is unavailable."""
+        weather_details = ""
+        if temperature and humidity:
+            weather_details = f" Weather conditions (temp {temperature}°C, humidity {humidity}%) "
             if humidity > 70:
-                weather_context = (
-                    f"The current weather conditions — temperature {temp_str} and high humidity "
-                    f"{humid_str} — are creating an ideal environment for this disease to spread. "
-                    f"Warm, humid conditions accelerate spore germination and increase the rate "
-                    f"of infection, making the next 48 hours critical for intervention."
-                )
+                weather_details += "are warm and humid, accelerating fungal spore spread."
             else:
-                weather_context = (
-                    f"The current weather — temperature {temp_str} and humidity {humid_str} — "
-                    f"presents a moderately favorable environment for this disease. While conditions "
-                    f"are not at peak risk levels, the pathogen is still active and will spread "
-                    f"without treatment."
-                )
+                weather_details += "present moderate risks for pathogen multiplication."
         else:
-            weather_context = (
-                "Without location data, specific weather-based risk cannot be calculated. "
-                "Fungal diseases like this one generally thrive in warm, humid conditions above 60% "
-                "relative humidity. Monitor local weather closely over the next 7 days."
-            )
+            weather_details = "Fungal pathogens thrive in warm, damp conditions above 60% relative humidity."
 
-        return (
-            f"{disease_name} has been detected on your {crop_name} crop with "
-            f"{conf_pct}% confidence. This disease is currently {severity_context}, "
-            f"affecting {area_str}. It is typically caused by fungal or bacterial "
-            f"pathogens that overwinter in infected plant debris and spread through "
-            f"water splash, wind, or contact during cultivation.\n\n"
-            f"{weather_context}\n\n"
-            f"Your most critical immediate actions are: First, remove and safely destroy "
-            f"all visibly infected leaves — do NOT compost them as this spreads the pathogen. "
-            f"Second, apply a copper-based or mancozeb fungicide within the next 24-48 hours, "
-            f"following the label rate. Third, switch to drip irrigation if possible and avoid "
-            f"wetting the foliage, as moisture on leaves dramatically accelerates the disease cycle.\n\n"
-            f"With timely and consistent treatment, most {crop_name} plants can recover "
-            f"within 10-14 days and yield losses can be kept below 15%. For next season, "
-            f"plant disease-resistant varieties, implement a 3-year crop rotation with "
-            f"non-host plants, and begin preventive fungicide sprays at first leaf emergence."
-        )
+        # Default rules based on disease
+        d_lower = disease_name.lower()
+        if "healthy" in d_lower:
+            summary = f"Your {crop_name} crop appears healthy. Continued monitoring and regular irrigation will help maintain yield potential."
+            features = [
+                "Leaves display normal green coloration.",
+                "Foliage lacks lesions, necrotic spots, or wilting symptoms."
+            ]
+            treatment = [
+                "Continue standard agricultural practices and balanced irrigation.",
+                "Perform regular crop inspections every 3-5 days to catch early infections."
+            ]
+            fertilizer = "Apply regular balanced NPK fertilizer (19-19-19) to sustain growth."
+        elif "early blight" in d_lower:
+            summary = f"Early Blight has been identified on your {crop_name} crop. {weather_details}"
+            features = [
+                "Small, dark brown spots on older leaves developing concentric rings (target spots).",
+                "Yellowing surrounding leaf spots leading to leaf drop."
+            ]
+            treatment = [
+                "Remove and destroy heavily infected lower foliage to reduce inoculum.",
+                "Apply protective copper-based fungicide or mancozeb every 7-10 days."
+            ]
+            fertilizer = "Apply Calcium Nitrate foliar spray to strengthen leaf cell walls and support recovery."
+        elif "late blight" in d_lower:
+            summary = f"Late Blight has been identified on your {crop_name} crop. This is a highly destructive disease. {weather_details}"
+            features = [
+                "Large, dark water-soaked lesions on leaves that expand rapidly.",
+                "White fungal growth visible on the undersides of leaves in humid weather."
+            ]
+            treatment = [
+                "Immediately harvest/destroy infected plants; do not compost.",
+                "Apply systemic fungicides (e.g., metalaxyl-m + mancozeb) to protect healthy rows."
+            ]
+            fertilizer = "Apply potassium-rich foliar fertilizers to boost general crop resistance."
+        else:
+            summary = f"{disease_name} has been detected on your {crop_name} crop. {weather_details}"
+            features = [
+                "Discoloration, lesions, or spotting on the leaf surfaces.",
+                "Abnormal leaf texture or premature leaf senescence."
+            ]
+            treatment = [
+                "Prune infected foliage and improve spacing to maximize airflow.",
+                "Apply a broad-spectrum copper fungicide preventatively."
+            ]
+            fertilizer = "Foliar application of micro-nutrients to reduce stress and help recovery."
+
+        return json.dumps({
+            "summary": summary,
+            "features": features,
+            "treatment": treatment,
+            "fertilizer": fertilizer
+        })
 
     @property
     def is_mock_mode(self) -> bool:
