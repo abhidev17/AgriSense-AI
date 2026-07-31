@@ -1,0 +1,76 @@
+version: "3.9"
+
+services:
+  # ─── FastAPI Backend ──────────────────────────────────────────────────────
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    container_name: agrisense-api
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      # Override MongoDB URI to use the service name defined below
+      MONGODB_URI: mongodb://mongo:27017
+      MONGODB_DB_NAME: agrisense
+      UPLOAD_DIR: /app/app/uploads
+    volumes:
+      # Persist uploaded images outside the container
+      - uploads_data:/app/app/uploads
+    depends_on:
+      mongo:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    networks:
+      - agrisense-net
+
+  # ─── MongoDB ──────────────────────────────────────────────────────────────
+  mongo:
+    image: mongo:7.0
+    container_name: agrisense-mongo
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    environment:
+      # Remove these lines to disable auth (local dev)
+      # MONGO_INITDB_ROOT_USERNAME: agrisense
+      # MONGO_INITDB_ROOT_PASSWORD: changeme
+      MONGO_INITDB_DATABASE: agrisense
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - agrisense-net
+
+# ─── Named Volumes ─────────────────────────────────────────────────────────
+volumes:
+  mongo_data:
+    name: agrisense_mongo_data
+  uploads_data:
+    name: agrisense_uploads
+
+# ─── Network ───────────────────────────────────────────────────────────────
+networks:
+  agrisense-net:
+    name: agrisense-network
+    driver: bridge

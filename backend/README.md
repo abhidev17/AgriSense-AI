@@ -186,3 +186,49 @@ All AI and external API services return **mock data** until real keys are config
 - Weather and market failures are **non-fatal** — the diagnosis still succeeds.
 - MongoDB unavailability is **non-fatal** — results are returned but not stored.
 - Use `LOG_LEVEL=DEBUG` in `.env` for verbose request/response tracing.
+
+---
+
+## Deployment Instructions
+
+### 1. Docker Deployment
+
+To build and run the backend inside a Docker container:
+
+```bash
+# Build the Docker image
+docker build -t agrisense-backend .
+
+# Run the container (injecting .env variables)
+docker run -d -p 8000:8000 --env-file .env agrisense-backend
+```
+
+### 2. Docker Compose (Recommended for local testing)
+
+To launch both the FastAPI backend and a MongoDB instance concurrently:
+
+```bash
+# Start the services in the background
+docker-compose up -d
+
+# View container logs
+docker-compose logs -f
+
+# Stop and remove containers
+docker-compose down
+```
+
+### 3. Render.com Deployment
+
+AgriSense AI contains a `render.yaml` specification for zero-config deployment to Render:
+
+1. Connect your GitHub repository to Render.
+2. Select **Blueprints** from the Render dashboard.
+3. Choose the repository and click **Apply**.
+4. Set the following environment variables in the Render dashboard:
+   - `MONGODB_URI` (your MongoDB Atlas URI)
+   - `GEMINI_API_KEY` (optional)
+   - `OPENWEATHER_API_KEY` (optional)
+   - `MARKET_API_KEY` (optional)
+5. The API will be deployed with a persistent disk space for image uploads.
+

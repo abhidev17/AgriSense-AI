@@ -23,3 +23,12 @@ python-dotenv==1.0.1
 
 # ─── Utilities ────────────────────────────────────────────────────────────────
 python-dateutil==2.9.0
+
+# ─── Google Gemini AI ──────────────────────────────────────────────────────────
+# Uncomment when GEMINI_API_KEY is set in .env
+# google-generativeai==0.8.3
+
+# ─── Testing ───────────────────────────────────────────────────────────────────
+pytest==8.3.4
+pytest-asyncio==0.24.0
+httpx==0.28.1

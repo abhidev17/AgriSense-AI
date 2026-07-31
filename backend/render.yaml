@@ -1,0 +1,58 @@
+# render.yaml — Render.com deployment manifest
+# https://render.com/docs/blueprint-spec
+
+services:
+  # ─── AgriSense AI API (FastAPI) ──────────────────────────────────────────
+  - type: web
+    name: agrisense-api
+    runtime: python
+    region: singapore  # Change to: oregon, frankfurt, ohio, virginia
+    plan: starter       # free | starter | standard | pro
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+
+    envVars:
+      # ── Application ─────────────────────────────────────────────────────
+      - key: APP_VERSION
+        value: "1.1.0"
+      - key: DEBUG
+        value: "false"
+      - key: LOG_LEVEL
+        value: "INFO"
+
+      # ── MongoDB Atlas ────────────────────────────────────────────────────
+      # Create a free cluster at https://cloud.mongodb.com
+      # Then set this secret in the Render dashboard
+      - key: MONGODB_URI
+        sync: false   # Set manually in dashboard — do not commit!
+      - key: MONGODB_DB_NAME
+        value: agrisense
+
+      # ── Upload settings ──────────────────────────────────────────────────
+      - key: UPLOAD_DIR
+        value: app/uploads
+      - key: MAX_IMAGE_SIZE_MB
+        value: "10"
+
+      # ── AI Keys (set manually in dashboard) ─────────────────────────────
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_MODEL
+        value: gemini-1.5-flash
+      - key: OPENWEATHER_API_KEY
+        sync: false
+      - key: MARKET_API_KEY
+        sync: false
+
+      # ── CORS ─────────────────────────────────────────────────────────────
+      # Replace with your actual frontend URL after deploying the React app
+      - key: ALLOWED_ORIGINS
+        value: '["http://localhost:3000","http://localhost:5173","https://agrisense-ai.onrender.com"]'
+
+    autoDeploy: true
+    disk:
+      name: uploads
+      mountPath: /opt/render/project/src/backend/app/uploads
+      sizeGB: 5
