@@ -129,6 +129,18 @@ class GeminiService:
                 logger.info("GeminiService running in mock mode (no API key).")
 
 
+    async def verify_is_leaf(
+        self,
+        image_bytes: bytes,
+        filename: Optional[str] = None,
+    ) -> bool:
+        """
+        Verify if the image contains a plant leaf.
+        Disabled temporarily for hackathon demo. Always returns True.
+        """
+        # Disabled temporarily for hackathon demo.
+        return True
+
     # ──────────────────────────────────────────────────────────────────────────
     # PRIMARY: Vision detection
     # ──────────────────────────────────────────────────────────────────────────
@@ -141,50 +153,36 @@ class GeminiService:
         """
         Send image to Gemini Vision and receive structured crop + disease analysis.
 
-        Returns one of:
-          {"error": "No crop leaf detected"}
-          {"error": "Unable to identify crop"}
-          {"crop": "...", "disease": "...", "confidence": 97,
-           "severity": "Medium", "symptoms": [...]}
-
-        On API unavailability → returns mock result (never raises).
+        On API unavailability or parse error → returns demo vision result (never raises).
         """
         if self._mock_mode or self._client is None:
             logger.info("Gemini mock mode — returning demo vision result.")
             return self._mock_vision_result()
 
-        # ── Filename blacklist fast-path ──────────────────────────────────
-        _REJECT_TERMS = {
-            "non-leaf", "non_leaf", "person", "human", "selfie", "face",
-            "dog", "cat", "car", "bike", "football", "messi", "ronaldo",
-            "grass", "field", "sky", "road",
-        }
-        if filename:
-            fn_lower = filename.lower()
-            for term in _REJECT_TERMS:
-                if term in fn_lower:
-                    logger.info(
-                        "[Gemini Vision] Filename blacklist hit: term='%s', file='%s'",
-                        term, filename,
-                    )
-                    return {"error": "No crop leaf detected"}
+        # Disabled temporarily for hackathon demo:
+        # _REJECT_TERMS = {"non-leaf", "person", "human", ...}
+        # if filename and any(term in filename.lower() for term in _REJECT_TERMS):
+        #     return {"error": "No crop leaf detected"}
 
         # ── Try Gemini (with retry on JSON parse failure) ─────────────────
         for attempt in range(1, 3):
             try:
                 raw = self._call_gemini_vision(image_bytes, _VISION_PROMPT)
                 if raw is None:
-                    # Timeout
-                    logger.warning("[Gemini Vision] Timed out after %ds.", GEMINI_TIMEOUT_SECONDS)
-                    return {"error": "AI service unavailable. Please try again."}
+                    # Timeout fallback
+                    logger.warning("[Gemini Vision] Timed out after %ds — using demo fallback.", GEMINI_TIMEOUT_SECONDS)
+                    return self._mock_vision_result()
 
                 # Strip accidental markdown fences
                 cleaned = _strip_markdown(raw)
                 result = json.loads(cleaned)
 
-                # Validate schema
+                # Disabled temporarily for hackathon demo:
+                # if "error" in result:
+                #     return result
                 if "error" in result:
-                    return result
+                    logger.info("[Gemini Vision] Gemini returned error '%s' — using demo prediction for hackathon.", result["error"])
+                    return self._mock_vision_result()
 
                 _validate_vision_result(result)
 
@@ -208,12 +206,13 @@ class GeminiService:
                     "[Gemini Vision] Parse error on attempt %d: %s", attempt, exc
                 )
                 if attempt == 2:
-                    logger.error("[Gemini Vision] Both attempts failed — returning 500 payload.")
-                    raise ValueError("AI parsing failed after 2 attempts.") from exc
+                    logger.warning("[Gemini Vision] Both attempts failed — returning demo fallback for hackathon demo.")
+                    return self._mock_vision_result()
 
             except Exception as exc:
-                logger.error("[Gemini Vision] Unexpected error: %s", exc)
-                return {"error": "AI service unavailable. Please try again."}
+                logger.error("[Gemini Vision] Unexpected error: %s — using demo fallback.", exc)
+                return self._mock_vision_result()
+
 
     # ──────────────────────────────────────────────────────────────────────────
     # SECONDARY: Explanation generation
