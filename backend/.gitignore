@@ -48,3 +48,6 @@ Thumbs.db
 .coverage
 htmlcov/
 .tox/
+
+# Datasets (do NOT commit 1GB dataset)
+datasets/

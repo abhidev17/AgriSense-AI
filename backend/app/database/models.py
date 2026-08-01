@@ -1,6 +1,9 @@
 """
 Pydantic database models (documents) for AgriSense AI.
 These models define the schema stored in MongoDB collections.
+
+BACKWARD COMPATIBLE — existing fields preserved.
+Added: ActionPlanData embedded document in DiagnosisDocument.
 """
 
 from datetime import datetime
@@ -16,7 +19,7 @@ class CropDetectionResult(BaseModel):
 
     name: str = Field(..., description="Detected crop name, e.g. 'Tomato'")
     confidence: float = Field(
-        ..., ge=0.0, le=1.0, description="Detection confidence (0–1)"
+        ..., ge=0.0, le=1.0, description="Detection confidence (0-1)"
     )
     source: str = Field(
         default="ai",
@@ -29,7 +32,7 @@ class DiseaseDetectionResult(BaseModel):
 
     name: str = Field(..., description="Detected disease name, e.g. 'Early Blight'")
     confidence: float = Field(
-        ..., ge=0.0, le=1.0, description="Detection confidence (0–1)"
+        ..., ge=0.0, le=1.0, description="Detection confidence (0-1)"
     )
     severity: str = Field(
         default="moderate",
@@ -44,7 +47,7 @@ class WeatherData(BaseModel):
     """Weather snapshot at the time of diagnosis."""
 
     temperature_celsius: Optional[float] = Field(
-        default=None, description="Temperature in °C"
+        default=None, description="Temperature in Celsius"
     )
     humidity_percent: Optional[float] = Field(
         default=None, description="Relative humidity (%)"
@@ -71,10 +74,10 @@ class MarketData(BaseModel):
 
     crop_name: str = Field(..., description="Crop for which prices are reported")
     current_price_per_kg: Optional[float] = Field(
-        default=None, description="Current wholesale price (₹/kg or $/kg)"
+        default=None, description="Current wholesale price"
     )
     predicted_price_per_kg: Optional[float] = Field(
-        default=None, description="30-day price prediction (₹/kg or $/kg)"
+        default=None, description="30-day price prediction"
     )
     price_trend: Optional[str] = Field(
         default=None, description="'up' | 'down' | 'stable'"
@@ -95,13 +98,35 @@ class LocationData(BaseModel):
     longitude: Optional[float] = Field(default=None)
 
 
+class ActionPlanTimelineItemData(BaseModel):
+    """A single timeline step stored in MongoDB."""
+
+    day: str = Field(..., description="Time frame label")
+    action: str = Field(..., description="Action to take")
+    reason: str = Field(..., description="Why this action is recommended")
+
+
+class ActionPlanData(BaseModel):
+    """
+    Action plan document embedded in DiagnosisDocument.
+    Mirrors ActionPlanResponse schema for consistent storage.
+    """
+
+    overall_risk: str = Field(..., description="Low | Medium | High | Critical")
+    risk_score: int = Field(..., ge=0, le=100, description="Numeric risk score (0-100)")
+    estimated_recovery: str = Field(..., description="Recovery estimate, e.g. '90-95%'")
+    timeline: list[ActionPlanTimelineItemData] = Field(default_factory=list)
+    immediate_actions: list[str] = Field(default_factory=list)
+    prevention_tips: list[str] = Field(default_factory=list)
+
+
 # ─── Main Document Model ───────────────────────────────────────────────────────
 
 
 class DiagnosisDocument(BaseModel):
     """
     MongoDB document model for a plant disease diagnosis.
-    This is what gets stored in the ``diagnoses`` collection.
+    Stored in the ``diagnoses`` collection.
     """
 
     # Identification
@@ -123,6 +148,11 @@ class DiagnosisDocument(BaseModel):
         default_factory=list, description="Ordered list of treatment steps"
     )
 
+    # Action plan (always present after generation)
+    action_plan: Optional[ActionPlanData] = Field(
+        default=None, description="Structured action plan and risk assessment"
+    )
+
     # Contextual data
     weather: Optional[WeatherData] = Field(default=None)
     market: Optional[MarketData] = Field(default=None)
@@ -136,6 +166,6 @@ class DiagnosisDocument(BaseModel):
     processing_time_ms: Optional[float] = Field(
         default=None, description="Total backend processing time in milliseconds"
     )
-    api_version: str = Field(default="1.0.0")
+    api_version: str = Field(default="1.1.0")
 
     model_config = {"arbitrary_types_allowed": True}

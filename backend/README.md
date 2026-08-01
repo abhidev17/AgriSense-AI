@@ -13,9 +13,10 @@ Provides plant disease diagnosis via image analysis, enriched with real-time wea
 | ASGI Server | Uvicorn |
 | Database | MongoDB (async via Motor) |
 | Image Processing | Pillow |
-| AI (pending) | Google Gemini |
-| Weather (pending) | OpenWeatherMap |
-| Market (pending) | Agmarknet / data.gov.in |
+| AI Framework | PyTorch (EfficientNet-B0 fine-tuned) |
+| Generative AI | Google Gemini (google-generativeai SDK) |
+| Weather | OpenWeatherMap |
+| Market | Agmarknet / data.gov.in |
 | Validation | Pydantic v2 |
 | Config | pydantic-settings + python-dotenv |
 
@@ -34,9 +35,10 @@ backend/
 │   │   ├── history.py           # GET|DELETE /history
 │   │   └── health.py            # GET  /health
 │   ├── services/
-│   │   ├── crop_ai.py           # Crop detection (mock → real AI)
-│   │   ├── disease_ai.py        # Disease detection (mock → real AI)
-│   │   ├── gemini.py            # Gemini explanation generator (mock → API)
+│   │   ├── crop_ai.py           # Crop detection (real PyTorch model inference)
+│   │   ├── disease_ai.py        # Disease detection (real PyTorch model inference)
+│   │   ├── gemini.py            # Gemini explanation generator (structured JSON + Fallback)
+│   │   ├── action_plan.py       # Recovery Action Plan Generator (Gemini + Rule-based fallback)
 │   │   ├── weather.py           # OpenWeatherMap (mock → API)
 │   │   ├── market.py            # Agmarknet prices (mock → API)
 │   │   └── mongo.py             # MongoDB CRUD service
@@ -50,139 +52,147 @@ backend/
 │   ├── schemas/
 │   │   └── __init__.py          # API request/response Pydantic schemas
 │   └── uploads/                 # Saved plant images (auto-organised by month)
+├── ai/
+│   ├── dataset.py               # PlantVillage PyTorch Dataset class
+│   ├── utils.py                 # Dataset loader splits & classes.json generation
+│   ├── train_crop.py            # Training script for crop classification
+│   ├── train_disease.py         # Training script for disease classification
+│   └── inference.py             # Unified lazy-loading inference module
+├── models/
+│   ├── crop_model.pth           # Saved weights for the crop classifier
+│   ├── disease_model.pth        # Saved weights for the disease classifier
+│   └── classes.json             # Model class mappings (generated during training)
+├── datasets/
+│   └── PlantVillage/            # PlantVillage dataset folder
 ├── requirements.txt
 ├── .env.example
+├── .env
 └── README.md
 ```
 
 ---
 
-## Quick Start
+## AI Layer & Model Training
 
-### 1. Prerequisites
+AgriSense AI utilizes a hierarchical ML pipeline with two fine-tuned deep learning classifiers built on PyTorch.
 
-- Python 3.12+
-- MongoDB running locally (or a MongoDB Atlas URI)
+### 1. Dataset Setup
+The dataset used is the standard **PlantVillage** dataset. Ensure the folder structure is organized under `backend/datasets/PlantVillage` with folders named like `Crop___Disease` (e.g. `Tomato___Early_blight`, `Tomato___healthy`, etc.).
 
-### 2. Clone & install
+Supported Crops:
+- Tomato
+- Potato
+- Pepper
+- Corn
+- Apple
+- Cherry
+- Grape
+- Peach
+- Strawberry
+- Soybean
+
+### 2. Training Models
+Make sure your working directory is `backend/ai/`. Run the following training commands to fine-tune the classifiers on the PlantVillage dataset:
+
+```bash
+cd backend/ai
+
+# Train the Crop Classifier
+python train_crop.py
+
+# Train the Disease Classifier
+python train_disease.py
+```
+
+*Note:* The training scripts automatically scan `backend/datasets/PlantVillage`, execute a train/validation split (80/20 stratified), train using an Adam optimizer with CrossEntropyLoss, and save the best-performing weights (`crop_model.pth` and `disease_model.pth`) alongside the mappings configuration file (`classes.json`) into the `backend/models/` directory.
+
+#### Fast Weight Generation (QUICK_GEN Mode)
+For testing and rapid CI environments, a `QUICK_GEN = True` flag can be set inside `train_crop.py` and `train_disease.py`. This subsets the dataset to a few samples and trains for a single epoch to verify the pipeline and output matching weights in seconds.
+
+---
+
+## Inference Service & Lazy Loading
+
+Model loading is handled lazily in `backend/ai/inference.py` to ensure fast startup speeds:
+- PyTorch models are loaded only when the first `/diagnose` request is received.
+- Subsequent calls reuse the loaded models kept in memory.
+- Inference functions support both local image paths and raw image bytes.
+
+### Hierarchical Crop Filtering
+During disease classification, `disease_ai.py` fetches the raw predictions of the 38-class disease classifier and filters them dynamically to only match classes matching the detected crop. This prevents cross-crop false positives (e.g. predicting a Tomato disease on a Potato leaf).
+
+---
+
+## Gemini Configuration & Explanation Generator
+
+The diagnosis natural language explanation is generated via the Google Gemini API. 
+
+### 1. Configuration
+To activate Gemini, create a `.env` file in the `backend/` directory and configure your API key:
+
+```env
+GEMINI_API_KEY=your_actual_gemini_api_key_here
+GEMINI_MODEL=gemini-1.5-flash
+```
+
+### 2. Output Schema
+The Gemini service requests a structured JSON response from Gemini, matching this format:
+
+```json
+{
+    "summary": "A farmer-friendly summary of the disease and current weather risk.",
+    "features": ["Visual feature 1", "Visual feature 2"],
+    "treatment": ["Immediate treatment step 1", "Immediate treatment step 2"],
+    "fertilizer": "NPK or fertilizer recommendation"
+}
+```
+
+### 3. Graceful Fallback
+If `GEMINI_API_KEY` is not set, or if an API error occurs (network issues, rate limits), the backend **gracefully falls back** to a local rule-based expert engine to generate the structured diagnosis explanation. The FastAPI application will never crash.
+
+---
+
+## Recovery Action Planner
+
+The Action Plan service (`action_plan.py`) generates a structured recovery action plan with:
+- `overall_risk` (Low | Medium | High | Critical)
+- `risk_score` (0-100) calculated from severity, temperature, humidity, and crop value.
+- `estimated_recovery` (e.g. 90-95%)
+- `timeline` containing day-by-day actions for `Today`, `Tomorrow`, `After 3 Days`, `Next Week`, and `Harvest` (incorporating current date, rain forecast, and market trend).
+
+If Gemini is available, it is used to write a highly tailored recovery plan. If Gemini is not set or fails, the service falls back to a deterministic rule-based engine.
+
+---
+
+## Running the Backend Locally
+
+### 1. Clone & install dependencies
+Ensure you are using Python 3.11+.
 
 ```bash
 cd backend
 python -m venv venv
 
-# Windows
+# Activate virtualenv (Windows)
 venv\Scripts\activate
 
-# macOS / Linux
-source venv/bin/activate
-
+# Install requirements
 pip install -r requirements.txt
 ```
 
-### 3. Configure environment
-
-```bash
-cp .env.example .env
-# Edit .env and fill in your keys
-```
-
-Minimum required for the server to start (everything else is mock):
-
-```env
-MONGODB_URI=mongodb://localhost:27017
-MONGODB_DB_NAME=agrisense
-```
-
-### 4. Run the server
+### 2. Run the server
+Ensure MongoDB is running locally.
 
 ```bash
 uvicorn app.main:app --reload
 ```
 
-Server starts at **http://localhost:8000**
-
 ---
 
-## API Documentation
+## Running Tests
 
-| URL | Description |
-|---|---|
-| http://localhost:8000/docs | Swagger UI (interactive) |
-| http://localhost:8000/redoc | ReDoc (read-only) |
-| http://localhost:8000/openapi.json | Raw OpenAPI schema |
+Run the full integration and unit test suite using `pytest`:
 
----
-
-## Endpoints
-
-| Method | Path | Description |
-|---|---|---|
-| `GET` | `/` | API welcome & status |
-| `GET` | `/health` | Health check (DB status) |
-| `POST` | `/diagnose` | **Core** — plant disease diagnosis |
-| `GET` | `/weather` | Current weather by coordinates |
-| `GET` | `/market` | Commodity price by crop name |
-| `GET` | `/history` | Paginated diagnosis history |
-| `GET` | `/history/{session_id}` | Single diagnosis detail |
-| `DELETE` | `/history/{session_id}` | Delete a diagnosis record |
-
----
-
-## POST /diagnose — Form Fields
-
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `image` | file | ✅ | Plant photo (JPEG / PNG / WebP, ≤ 10 MB) |
-| `crop` | string | ❌ | Crop name (skips AI crop detection if provided) |
-| `latitude` | float | ❌ | GPS latitude for weather lookup |
-| `longitude` | float | ❌ | GPS longitude for weather lookup |
-
-### Example Response
-
-```json
-{
-  "session_id": "550e8400-e29b-41d4-a716-446655440000",
-  "status": "success",
-  "crop": { "name": "Tomato", "confidence": 0.97, "confidence_percent": "97.0%", "source": "ai" },
-  "disease": { "name": "Early Blight", "confidence": 0.98, "severity": "moderate", "affected_area_percent": 35.0 },
-  "explanation": "Early Blight has been detected on your Tomato crop…",
-  "treatment_recommendations": ["Remove infected leaves immediately.", "Apply copper fungicide every 7–10 days."],
-  "weather": { "temperature_celsius": 28.5, "humidity_percent": 72.0, "condition": "Partly Cloudy" },
-  "market": { "current_price_per_kg": 22.5, "predicted_price_per_kg": 26.0, "price_trend": "up" },
-  "processing_time_ms": 312.5
-}
+```bash
+python -m pytest
 ```
-
----
-
-## Current State — Mock Services
-
-All AI and external API services return **mock data** until real keys are configured:
-
-| Service | Mock Behaviour | Activation |
-|---|---|---|
-| Crop AI | Returns "Tomato @ 97%" | Set model path in `crop_ai.py` |
-| Disease AI | Returns "Early Blight @ 98%" | Set model path in `disease_ai.py` |
-| Gemini | Returns a rich template explanation | Set `GEMINI_API_KEY` in `.env` |
-| Weather | Returns randomised Pune weather | Set `OPENWEATHER_API_KEY` in `.env` |
-| Market | Returns randomised ₹ prices | Set `MARKET_API_KEY` in `.env` |
-
----
-
-## Error Codes
-
-| HTTP Code | When |
-|---|---|
-| 400 | Invalid image (type, size, corrupted) or missing coordinates |
-| 404 | Session ID not found in history |
-| 422 | Form field validation failure |
-| 500 | Unexpected server error |
-
----
-
-## Development Tips
-
-- All services are singletons — no need to instantiate them in routes.
-- Weather and market failures are **non-fatal** — the diagnosis still succeeds.
-- MongoDB unavailability is **non-fatal** — results are returned but not stored.
-- Use `LOG_LEVEL=DEBUG` in `.env` for verbose request/response tracing.

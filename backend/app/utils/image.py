@@ -116,7 +116,7 @@ def save_image(image_bytes: bytes, original_filename: str | None = None) -> str:
     file_path = month_dir / unique_name
 
     file_path.write_bytes(image_bytes)
-    logger.info("Image saved → %s", file_path)
+    logger.info("Image saved -> %s", file_path)
 
     return str(file_path)
 

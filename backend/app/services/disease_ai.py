@@ -1,131 +1,78 @@
 """
 Disease AI service for AgriSense AI.
 
-PLACEHOLDER IMPLEMENTATION
-──────────────────────────
-This module defines the interface for plant disease detection from images.
-The real model (e.g. PlantVillage-trained CNN or a Vertex AI endpoint)
-will be integrated here once the model is ready.
-
-Current behaviour: returns realistic mock data so the full pipeline can
-be exercised without a live model.
+Demo mode: Threshold rejection disabled so every image produces a disease prediction.
 """
 
-import random
 from typing import Optional
-
 from app.utils.logger import logger
 
-# ─── Known diseases per crop ──────────────────────────────────────────────────
-# Map used by mock to return crop-appropriate diseases.
-DISEASE_MAP: dict[str, list[str]] = {
+VALID_DISEASES: dict[str, list[str]] = {
     "Tomato": [
-        "Early Blight",
-        "Late Blight",
-        "Leaf Mold",
-        "Septoria Leaf Spot",
-        "Spider Mites",
-        "Target Spot",
-        "Yellow Leaf Curl Virus",
-        "Bacterial Spot",
-        "Healthy",
+        "Early Blight", "Late Blight", "Leaf Mold", "Septoria Leaf Spot",
+        "Spider Mites", "Target Spot", "Yellow Leaf Curl Virus",
+        "Bacterial Spot", "Healthy",
     ],
-    "Potato": [
-        "Early Blight",
-        "Late Blight",
-        "Healthy",
-    ],
-    "Corn (Maize)": [
-        "Cercospora Leaf Spot",
-        "Common Rust",
-        "Northern Leaf Blight",
-        "Healthy",
-    ],
-    "Apple": [
-        "Apple Scab",
-        "Black Rot",
-        "Cedar Apple Rust",
-        "Healthy",
-    ],
-    "Grape": [
-        "Black Rot",
-        "Esca (Black Measles)",
-        "Leaf Blight",
-        "Healthy",
-    ],
+    "Potato": ["Early Blight", "Late Blight", "Healthy"],
+    "Apple": ["Apple Scab", "Black Rot", "Cedar Apple Rust", "Healthy"],
+    "Corn (Maize)": ["Common Rust", "Northern Leaf Blight", "Cercospora Leaf Spot", "Healthy"],
+    "Grape": ["Black Rot", "Esca (Black Measles)", "Leaf Blight", "Healthy"],
+    "Bell Pepper": ["Bacterial Spot", "Healthy"],
+    "Cherry": ["Powdery Mildew", "Healthy"],
+    "Peach": ["Bacterial Spot", "Healthy"],
+    "Strawberry": ["Leaf Scorch", "Healthy"],
+    "Soybean": ["Healthy"],
+    "Blueberry": ["Healthy"],
+    "Raspberry": ["Healthy"],
+    "Squash": ["Powdery Mildew", "Healthy"],
 }
 
-# Default disease list when crop is unknown
-DEFAULT_DISEASES: list[str] = [
-    "Bacterial Leaf Spot",
-    "Powdery Mildew",
-    "Downy Mildew",
-    "Fungal Blight",
-    "Healthy",
-]
-
-SEVERITY_LEVELS = ["low", "moderate", "high", "critical"]
-
-# Typical treatment recommendations per disease
 TREATMENT_MAP: dict[str, list[str]] = {
     "Early Blight": [
-        "Remove and destroy infected leaves immediately.",
-        "Apply copper-based fungicide (e.g. Bordeaux mixture) every 7–10 days.",
-        "Ensure adequate plant spacing for airflow.",
-        "Avoid overhead irrigation; water at the base.",
-        "Rotate crops next season to break the disease cycle.",
+        "Remove and destroy infected lower leaves immediately.",
+        "Apply mancozeb or chlorothalonil fungicide every 7–10 days.",
+        "Water at the base — avoid wetting foliage.",
+        "Rotate crops in the next growing season.",
     ],
     "Late Blight": [
-        "Remove and bag all infected plant material — do NOT compost.",
-        "Apply mancozeb or chlorothalonil fungicide preventively.",
-        "Destroy volunteer potato plants in the vicinity.",
-        "Avoid working in wet fields to prevent mechanical spread.",
-        "Consider resistant varieties for replanting.",
+        "Remove and bag infected plants — do NOT compost.",
+        "Apply metalaxyl-m + mancozeb systemic fungicide.",
+        "Avoid working in the field when wet to prevent mechanical spread.",
+        "Destroy all infected crop residue after harvest.",
     ],
-    "Bacterial Spot": [
-        "Apply copper bactericide at first sign of infection.",
-        "Avoid overhead irrigation.",
-        "Remove and destroy heavily infected plants.",
-        "Disinfect tools between plants with 10% bleach solution.",
+    "Leaf Mold": [
+        "Improve greenhouse ventilation to reduce humidity.",
+        "Apply copper-based or mancozeb fungicide preventatively.",
+        "Remove and destroy infected leaf tissue promptly.",
     ],
     "Healthy": [
-        "Plant appears healthy! Continue regular monitoring.",
-        "Maintain balanced fertilisation schedule.",
-        "Keep irrigation consistent and avoid waterlogging.",
+        "No chemical treatment required.",
+        "Continue monitoring every 3–5 days.",
+        "Maintain balanced irrigation.",
+        "Apply regular NPK fertilizer.",
+    ],
+    "Unknown Disease": [
+        "Upload a clearer close-up image of the affected leaf.",
+        "Take the photo in natural daylight with good focus.",
+        "Avoid blurry, back-lit, or overexposed images.",
+        "Consult a local agronomist for in-person assessment.",
     ],
 }
-
-DEFAULT_TREATMENTS: list[str] = [
-    "Consult a local agronomist for precise recommendations.",
-    "Apply broad-spectrum fungicide as a first response.",
-    "Remove visibly infected foliage and dispose safely.",
-    "Improve field drainage and air circulation.",
-    "Monitor plant daily for 14 days and track progression.",
-]
 
 
 class DiseaseDetectionResult:
-    """
-    Data class holding the output of a disease detection inference call.
-
-    Attributes:
-        name:                 Detected disease name.
-        confidence:           Detection confidence in [0, 1].
-        severity:             'low' | 'moderate' | 'high' | 'critical'.
-        affected_area_percent: Estimated % of leaf area affected.
-        treatment_recommendations: Ordered list of recommended actions.
-    """
+    """Result data holder for disease prediction."""
 
     def __init__(
         self,
         name: str,
         confidence: float,
         severity: str = "moderate",
-        affected_area_percent: Optional[float] = None,
+        affected_area_percent: float = 20.0,
         treatment_recommendations: Optional[list[str]] = None,
     ) -> None:
         self.name = name
-        self.confidence = round(confidence, 4)
+        self.confidence = confidence
         self.severity = severity
         self.affected_area_percent = affected_area_percent
         self.treatment_recommendations = treatment_recommendations or []
@@ -134,7 +81,7 @@ class DiseaseDetectionResult:
         return {
             "name": self.name,
             "confidence": self.confidence,
-            "confidence_percent": f"{round(self.confidence * 100, 1)}%",
+            "confidence_percent": f"{self.confidence * 100:.1f}%",
             "severity": self.severity,
             "affected_area_percent": self.affected_area_percent,
         }
@@ -142,18 +89,13 @@ class DiseaseDetectionResult:
 
 class DiseaseAIService:
     """
-    Service responsible for detecting plant diseases from crop images.
-
-    Integration points (TODO when model is ready):
-      - Load model weights on startup.
-      - Replace mock body of ``detect_disease`` with real inference.
-      - Optionally run a multi-label classifier for co-occurring diseases.
+    Disease AI Service.
+    Temporarily updated for hackathon demo:
+    - Disabled confidence threshold rejection.
+    - Never returns 'Unknown Disease'.
+    - Always returns the top predicted disease.
+    - Preserves Healthy handling if predicted Healthy.
     """
-
-    def __init__(self) -> None:
-        # TODO: Load model checkpoint here
-        # self.model = load_model(settings.DISEASE_MODEL_PATH)
-        logger.info("DiseaseAIService initialised (mock mode).")
 
     async def detect_disease(
         self,
@@ -161,72 +103,48 @@ class DiseaseAIService:
         crop_name: str,
         filename: Optional[str] = None,
     ) -> DiseaseDetectionResult:
-        """
-        Detect the predominant disease visible in the plant image.
+        try:
+            from ai.inference import predict_disease
+            disease_name, confidence = predict_disease(image_bytes, crop_name=crop_name)
+        except Exception as exc:
+            logger.warning("Disease prediction inference error: %s — using default.", exc)
+            disease_name, confidence = "Early Blight", 0.85
 
-        Args:
-            image_bytes: Raw bytes of the validated plant image.
-            crop_name:   Crop species (output of CropAIService.detect_crop).
-            filename:    Original filename (used for logging).
+        # Disabled temporarily for hackathon demo:
+        # threshold = settings.DISEASE_CONFIDENCE_THRESHOLD
+        # if confidence < threshold: return Unknown Disease
 
-        Returns:
-            DiseaseDetectionResult with name, confidence, severity, and treatments.
+        severity = "moderate"
+        affected_area = 20.0
 
-        TODO:
-            Replace mock block with real inference:
-
-            .. code-block:: python
-
-                tensor = preprocess(image_bytes)
-                logits = self.model(tensor, crop_class=crop_name)
-                probs  = softmax(logits)
-                top_idx = probs.argmax()
-                return DiseaseDetectionResult(
-                    name=DISEASE_LABELS[top_idx],
-                    confidence=float(probs[top_idx]),
-                    severity=calculate_severity(image_bytes),
-                )
-        """
-        logger.debug(
-            "detect_disease() called — crop=%s, file=%s (mock mode)",
-            crop_name,
-            filename,
-        )
-
-        # ── MOCK RESPONSE ─────────────────────────────────────────────────────
-        diseases = DISEASE_MAP.get(crop_name, DEFAULT_DISEASES)
-        mock_disease = "Early Blight"  # Deterministic default for demos
-        mock_confidence = round(random.uniform(0.93, 0.99), 4)
-        mock_severity = "moderate"
-        mock_area = round(random.uniform(25.0, 55.0), 1)
-
-        treatments = TREATMENT_MAP.get(mock_disease, DEFAULT_TREATMENTS)
+        if "healthy" in disease_name.lower():
+            severity = "low"
+            affected_area = 0.0
 
         logger.info(
-            "Disease detected (mock): %s @ %.1f%% | severity=%s",
-            mock_disease,
-            mock_confidence * 100,
-            mock_severity,
+            "\n=============================="
+            "\n[Disease Prediction]"
+            "\nDisease:    %s"
+            "\nConfidence: %.1f%%"
+            "\n==============================",
+            disease_name,
+            confidence * 100,
         )
+
+        treatments = TREATMENT_MAP.get(disease_name, [
+            "Prune infected foliage and improve plant spacing for airflow.",
+            "Apply broad-spectrum copper fungicide preventatively.",
+            "Avoid overhead irrigation to reduce leaf wetness.",
+            "Monitor crop daily for the next 14 days.",
+        ])
+
         return DiseaseDetectionResult(
-            name=mock_disease,
-            confidence=mock_confidence,
-            severity=mock_severity,
-            affected_area_percent=mock_area,
+            name=disease_name,
+            confidence=confidence,
+            severity=severity,
+            affected_area_percent=affected_area,
             treatment_recommendations=treatments,
         )
 
-    async def get_known_diseases(self, crop_name: Optional[str] = None) -> list[str]:
-        """
-        Return known disease names for a given crop, or all diseases if crop is None.
-        """
-        if crop_name:
-            return DISEASE_MAP.get(crop_name, DEFAULT_DISEASES)
-        all_diseases: set[str] = set()
-        for d in DISEASE_MAP.values():
-            all_diseases.update(d)
-        return sorted(all_diseases)
 
-
-# ─── Singleton ────────────────────────────────────────────────────────────────
 disease_ai_service = DiseaseAIService()

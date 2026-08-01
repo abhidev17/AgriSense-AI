@@ -1,6 +1,9 @@
 """
 Pydantic request / response schemas for AgriSense AI API.
 These are the shapes exposed to external clients (distinct from DB models).
+
+BACKWARD COMPATIBLE — existing fields are unchanged.
+New fields: ActionPlanTimelineItem, ActionPlanResponse added to DiagnosisResponse.
 """
 
 from datetime import datetime
@@ -16,7 +19,7 @@ class CropInfo(BaseModel):
 
     name: str = Field(..., examples=["Tomato"], description="Detected crop name")
     confidence: float = Field(
-        ..., ge=0.0, le=1.0, examples=[0.97], description="Confidence score (0–1)"
+        ..., ge=0.0, le=1.0, examples=[0.97], description="Confidence score (0-1)"
     )
     confidence_percent: str = Field(
         ..., examples=["97%"], description="Confidence as a formatted percentage"
@@ -35,7 +38,7 @@ class DiseaseInfo(BaseModel):
         ..., examples=["Early Blight"], description="Detected disease name"
     )
     confidence: float = Field(
-        ..., ge=0.0, le=1.0, examples=[0.98], description="Confidence score (0–1)"
+        ..., ge=0.0, le=1.0, examples=[0.98], description="Confidence score (0-1)"
     )
     confidence_percent: str = Field(
         ..., examples=["98%"], description="Confidence as a formatted percentage"
@@ -56,7 +59,7 @@ class WeatherInfo(BaseModel):
     """Weather snapshot returned to the client."""
 
     temperature_celsius: Optional[float] = Field(
-        default=None, examples=[28.5], description="Temperature in °C"
+        default=None, examples=[28.5], description="Temperature in Celsius"
     )
     humidity_percent: Optional[float] = Field(
         default=None, examples=[72.0], description="Relative humidity (%)"
@@ -95,11 +98,71 @@ class MarketInfo(BaseModel):
     )
     recommendation: Optional[str] = Field(
         default=None,
-        examples=["Hold stock for 2–3 weeks; prices expected to rise."],
+        examples=["Hold stock for 2-3 weeks; prices expected to rise."],
         description="Market action recommendation",
     )
     currency: str = Field(default="INR", examples=["INR"])
     source: str = Field(default="mock", examples=["agmarknet"])
+
+
+# ─── Action Plan schemas ───────────────────────────────────────────────────────
+
+
+class ActionPlanTimelineItem(BaseModel):
+    """A single step in the recovery action timeline."""
+
+    day: str = Field(
+        ...,
+        examples=["Today"],
+        description="Time frame label: Today | Tomorrow | After 3 Days | Next Week | Harvest",
+    )
+    action: str = Field(
+        ...,
+        examples=["Remove infected leaves"],
+        description="Specific action to take in this time frame",
+    )
+    reason: str = Field(
+        ...,
+        examples=["Prevents disease spread to healthy tissue."],
+        description="Why this action is recommended at this time",
+    )
+
+
+class ActionPlanResponse(BaseModel):
+    """
+    Structured risk assessment and recovery plan.
+    Generated from disease severity + weather + market context.
+    """
+
+    overall_risk: str = Field(
+        ...,
+        examples=["Medium"],
+        description="Overall risk level: Low | Medium | High | Critical",
+    )
+    risk_score: int = Field(
+        ...,
+        ge=0,
+        le=100,
+        examples=[62],
+        description="Numeric risk score (0=no risk, 100=critical)",
+    )
+    estimated_recovery: str = Field(
+        ...,
+        examples=["90-95%"],
+        description="Estimated crop recovery percentage with prompt treatment",
+    )
+    timeline: list[ActionPlanTimelineItem] = Field(
+        default_factory=list,
+        description="Ordered day-by-day action plan",
+    )
+    immediate_actions: list[str] = Field(
+        default_factory=list,
+        description="Critical actions required within 24 hours",
+    )
+    prevention_tips: list[str] = Field(
+        default_factory=list,
+        description="Long-term prevention recommendations for next season",
+    )
 
 
 # ─── Diagnosis Response ────────────────────────────────────────────────────────
@@ -108,7 +171,7 @@ class MarketInfo(BaseModel):
 class DiagnosisResponse(BaseModel):
     """
     Full diagnosis response returned by POST /diagnose.
-    Combines AI, weather, and market results in one payload.
+    Combines AI, weather, market results, and action plan in one payload.
     """
 
     session_id: str = Field(
@@ -128,6 +191,10 @@ class DiagnosisResponse(BaseModel):
         default_factory=list,
         description="Ordered list of treatment steps",
     )
+    treatment: list[str] = Field(
+        default_factory=list,
+        description="Ordered list of treatment steps (alias/compatible field)",
+    )
 
     # Contextual enrichment
     weather: Optional[WeatherInfo] = Field(
@@ -135,6 +202,11 @@ class DiagnosisResponse(BaseModel):
     )
     market: Optional[MarketInfo] = Field(
         default=None, description="Market data for the detected crop"
+    )
+
+    # Action plan (always present)
+    action_plan: ActionPlanResponse = Field(
+        ..., description="Structured risk assessment and recovery action plan"
     )
 
     # Meta
@@ -155,14 +227,16 @@ class DiagnosisHistoryItem(BaseModel):
     crop_name: str
     disease_name: str
     disease_severity: str
+    risk_score: Optional[int] = Field(default=None, description="Action plan risk score")
+    overall_risk: Optional[str] = Field(default=None, description="Risk level label")
     timestamp: datetime
     image_path: str
 
 
 class DiagnosisHistoryResponse(BaseModel):
-    """Paginated history response."""
+    """Paginated history response with optional filtering."""
 
-    total: int = Field(..., description="Total number of records in the collection")
+    total: int = Field(..., description="Total number of matching records")
     page: int = Field(..., description="Current page (1-indexed)")
     page_size: int = Field(..., description="Number of records per page")
     items: list[DiagnosisHistoryItem]
